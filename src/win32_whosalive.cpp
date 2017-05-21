@@ -96,19 +96,20 @@ enum JsonType
 struct JsonToken
 {
     JsonType type;
-    int start;
-    int end;
-    int size;
+    i32 start;
+    i32 end;
+    i32 size;
+    i32 parent;
 };
 
 struct JsonParser
 {
-    unsigned int num_tokens;
-    unsigned int token_array_count;
     JsonToken *token_array;
+    u32 token_array_count;
+    u32 num_tokens;
 
-    unsigned int at;
-    int parent;
+    u32 at;
+    i32 parent;
 
     JsonParserStatus status;
 };
@@ -133,13 +134,14 @@ inline JsonToken *json_new_token(JsonParser *parser)
         token = &parser->token_array[parser->num_tokens++];
         token->start = token->end = -1;
         token->size = 0;
+        token->parent = -1;
     }
     return token;
 }   
 
-static int json_parse(JsonParser *parser, char *json_string, unsigned int json_string_length)
+static i32 json_parse(JsonParser *parser, char *json_string, u32 json_string_length)
 {
-    int num_tokens_found = parser->num_tokens;
+    i32 num_tokens_found = parser->num_tokens;
     for ( ; parser->at < json_string_length && json_string[parser->at]; ++parser->at)
     {
         char c = json_string[parser->at];
@@ -165,7 +167,9 @@ static int json_parse(JsonParser *parser, char *json_string, unsigned int json_s
                     JsonToken *parent_token = &parser->token_array[parser->parent];
                     if (parent_token->type != JsonType_Array && parent_token->type != JsonType_Object)
                     {
-                        for (int token_index = parser->num_tokens - 1; token_index >= 0; --token_index)
+                        parser->parent = parser->token_array[parser->parent].parent;
+
+                        for (i32 token_index = parser->num_tokens - 1; token_index >= 0; --token_index)
                         {
                             JsonToken *token = &parser->token_array[token_index];
                             if (token->type == JsonType_Array || token->type == JsonType_Object)
@@ -192,6 +196,7 @@ static int json_parse(JsonParser *parser, char *json_string, unsigned int json_s
                     if (parser->parent != -1)
                     {
                         ++parser->token_array[parser->parent].size;
+                        token->parent = parser->parent;
                     }
 
                     token->type = (c == '{' ? JsonType_Object : JsonType_Array);
@@ -210,46 +215,44 @@ static int json_parse(JsonParser *parser, char *json_string, unsigned int json_s
             case ']':
             {
                 JsonType type = (c == '}' ? JsonType_Object : JsonType_Array);
-                int token_index;
-                for (token_index = parser->num_tokens - 1; token_index >= 0; --token_index)
+                if (parser->num_tokens > 0)
                 {
-                    JsonToken *token = &parser->token_array[token_index];
-                    if (token->start != -1 && token->end == -1)
+                    JsonToken *token = &parser->token_array[parser->num_tokens - 1];
+                    for ( ; ; )
                     {
-                        if (token->type == type)
+                        if (token->start != -1 && token->end == -1)
                         {
-                            parser->parent = -1;
-                            token->end = parser->at + 1;
+                            if (token->type == type)
+                            {
+                                token->end = parser->at + 1;
+                                parser->parent = token->parent;    
+                            }
+                            else
+                            {
+                                parser->status = JsonParserStatus_InvalidCharacter;
+                                json_string_length = parser->at; // NOTE(dan): break out from the loop
+                            }
+                            break;
                         }
-                        else
+
+                        if (token->parent == -1)
                         {
-                            parser->status = JsonParserStatus_InvalidCharacter;
-                            json_string_length = parser->at; // NOTE(dan): break out from the loop
+                            break;
                         }
-                        break;
+
+                        token = &parser->token_array[token->parent];
                     }
                 }
-
-                if (token_index < 0) // NOTE(dan): unmatched closing bracket
+                else
                 {
                     parser->status = JsonParserStatus_InvalidCharacter;
                     json_string_length = parser->at; // NOTE(dan): break out from the loop
-                }
-
-                for ( ; token_index >= 0; --token_index)
-                {
-                    JsonToken *token = &parser->token_array[token_index];
-                    if (token->start != -1 && token->end == -1)
-                    {
-                        parser->parent = token_index;
-                        break;
-                    }
                 }
             } break;
 
             case '\"':
             {
-                int start = parser->at;
+                i32 start = parser->at;
                 ++parser->at;
 
                 for ( ; parser->at < json_string_length && json_string[parser->at]; ++parser->at)
@@ -265,6 +268,7 @@ static int json_parse(JsonParser *parser, char *json_string, unsigned int json_s
                             token->start = start + 1;
                             token->end = parser->at;
                             token->size = 0;
+                            token->parent = parser->parent;
                             break;
                         }
                         else
@@ -288,7 +292,7 @@ static int json_parse(JsonParser *parser, char *json_string, unsigned int json_s
             default:
             {
                 // NOTE(dan): if not object, array or string, it should be primitive
-                int start = parser->at;
+                i32 start = parser->at;
                 for ( ; parser->at < json_string_length && json_string[parser->at]; ++parser->at)
                 {
                     switch (json_string[parser->at])
@@ -322,6 +326,7 @@ static int json_parse(JsonParser *parser, char *json_string, unsigned int json_s
                         token->start = start;
                         token->end = parser->at;
                         token->size = 0;
+                        token->parent = parser->parent;
 
                         --parser->at;
                         ++num_tokens_found;
@@ -345,20 +350,140 @@ static int json_parse(JsonParser *parser, char *json_string, unsigned int json_s
 
 //
 
+static b32 json_string_token_equals(char *json_string, JsonToken *token, char *string)
+{
+    b32 equals = false;
+    u32 length = token->end - token->start;
+    char *test_string = json_string + token->start;
+    if (test_string && string)
+    {
+        while (length && *test_string && *string && *test_string == *string)
+        {
+            ++test_string;
+            ++string;
+            --length;
+        }
+        equals = (!length && *string == 0);
+    }
+    return equals;
+}
+
+struct JsonIterator
+{
+    JsonToken *tokens;
+    JsonToken *at;
+    JsonToken *one_past_last;
+    i32 parent_index;
+};
+
+inline JsonIterator json_iterator_get(JsonParser *parser, i32 parent_index)
+{
+    JsonIterator iterator = {0};
+    iterator.tokens = parser->token_array;
+    iterator.one_past_last = parser->token_array + parser->num_tokens;
+    iterator.at = parser->token_array + parent_index;
+    assert((iterator.at >= iterator.tokens) && (iterator.at < iterator.one_past_last));
+
+    iterator.parent_index = parent_index;
+    return iterator;
+}
+
+inline b32 json_iterator_valid(JsonIterator iterator)
+{
+    b32 valid = (iterator.at && (iterator.at < iterator.one_past_last));
+    return valid;
+}
+
+inline JsonIterator json_iterator_next(JsonIterator iterator)
+{
+    for (JsonToken *token = ++iterator.at; token < iterator.one_past_last; ++token, ++iterator.at)
+    {
+        if (token->parent == iterator.parent_index)
+        {
+            break;
+        }
+    }
+    return iterator;
+}
+
+inline i32 json_get_token_index(JsonParser *parser, JsonToken *token)
+{
+    i32 index = (i32)((token - parser->token_array) / sizeof(JsonToken));
+    
+    assert((index >= 0) && ((u32)index < parser->num_tokens));
+    return index;
+}
+
+inline JsonToken *json_get_token(JsonIterator iterator)
+{
+    JsonToken *token = iterator.at;
+    return token;
+}
+
+inline JsonToken *json_get_next_token(JsonIterator iterator)
+{
+    JsonToken *token = 0;
+    if ((iterator.at + 1) < iterator.one_past_last)
+    {
+        token = iterator.at + 1;
+    }
+    return token;
+}
+
+inline i32 read_i32_from_string(char *json_string, i32 length)
+{
+    i32 value = 0;
+    char *at = json_string;
+    while ((length > 0) && (*at >= '0') && (*at <= '9'))
+    {
+        value *= 10;
+        value += (*at - '0');
+        ++at;
+        --length;
+    }
+    return value;
+}
+
 static void win32_parse_json(void *data, unsigned int data_size)
 {
+    char *json_string = (char *)data;
     JsonParser parser;
-    JsonToken tokens[64] = {};
+    JsonToken tokens[1024] = {};
 
     json_init_parser(&parser, tokens, array_count(tokens));
     json_parse(&parser, (char *)data, data_size);
 
+    if (tokens[0].type == JsonType_Object)
+    {
+        for (JsonIterator root_iterator = json_iterator_get(&parser, 0); json_iterator_valid(root_iterator); root_iterator = json_iterator_next(root_iterator))
+        {
+            JsonToken *identifier = json_get_token(root_iterator);
+            JsonToken *value = json_get_next_token(root_iterator);
+            
+            if (value)
+            {
+                // NOTE(dan): we are in the root and have {"_total": int, "streams": Array, "links": Object}
+                if (identifier->type == JsonType_String)
+                {
+                    if (value->type == JsonType_Primitive && json_string_token_equals(json_string, root_iterator.at, "_total"))
+                    {
+                        char *total = json_string + value->start;
+                        i32 total_value = read_i32_from_string(total, value->end - value->start);
 
+                    }
+                    else if (value->type == JsonType_Array && json_string_token_equals(json_string, root_iterator.at, "streams"))
+                    {
+                        char *streams = json_string + value->start;
+                    }
+                }
+            }
+        }
+    }
 }
 
 static void win32_update(HINTERNET internet, void *data, unsigned int data_size)
 {
-    char *url = "https://api.twitch.tv/kraken/streams?channel=nothings2";
+    char *url = "https://api.twitch.tv/kraken/streams?channel=gyilokeu,ikszes";
     char *headers = "Client-ID: j6dzqx92ht08vnyr1ghz0a1fdw6oss";
 
     HINTERNET connection = InternetOpenUrlA(internet, url, headers, (unsigned int)-1, INTERNET_FLAG_EXISTING_CONNECT | INTERNET_FLAG_KEEP_CONNECTION | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE, 0);
