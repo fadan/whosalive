@@ -376,18 +376,33 @@ struct JsonIterator
     i32 parent_index;
 };
 
-inline JsonIterator json_iterator_get(JsonParser *parser, i32 parent_index)
+inline JsonIterator json_iterator_get(JsonParser *parser, JsonToken *from)
 {
     JsonIterator iterator = {0};
     iterator.tokens = parser->token_array;
     iterator.one_past_last = parser->token_array + parser->num_tokens;
-    iterator.at = parser->token_array + parent_index;
-    assert((iterator.at >= iterator.tokens) && (iterator.at < iterator.one_past_last));
+
+    iterator.at = iterator.one_past_last;
+
+    i32 parent_index = 0;
+    if (from)
+    {
+        parent_index = (i32)(from - parser->token_array);
+        assert((parent_index >= 0) && ((u32)parent_index < parser->num_tokens));
+    }
+
+    for (JsonToken *token = iterator.tokens; token < iterator.one_past_last; ++token)
+    {
+        if (token->parent == parent_index)
+        {
+            iterator.at = token;
+            break;
+        }
+    }
 
     iterator.parent_index = parent_index;
     return iterator;
 }
-
 inline b32 json_iterator_valid(JsonIterator iterator)
 {
     b32 valid = (iterator.at && (iterator.at < iterator.one_past_last));
@@ -408,8 +423,7 @@ inline JsonIterator json_iterator_next(JsonIterator iterator)
 
 inline i32 json_get_token_index(JsonParser *parser, JsonToken *token)
 {
-    i32 index = (i32)((token - parser->token_array) / sizeof(JsonToken));
-    
+    i32 index = (i32)(token - parser->token_array);    
     assert((index >= 0) && ((u32)index < parser->num_tokens));
     return index;
 }
@@ -420,7 +434,7 @@ inline JsonToken *json_get_token(JsonIterator iterator)
     return token;
 }
 
-inline JsonToken *json_get_next_token(JsonIterator iterator)
+inline JsonToken *json_peek_next_token(JsonIterator iterator)
 {
     JsonToken *token = 0;
     if ((iterator.at + 1) < iterator.one_past_last)
@@ -444,38 +458,71 @@ inline i32 read_i32_from_string(char *json_string, i32 length)
     return value;
 }
 
-static void win32_parse_json(void *data, unsigned int data_size)
+inline void copy_string_and_null_terminate(char *src, char *dest, i32 length)
+{
+    for (i32 char_index = 0; char_index < length; ++char_index)
+    {
+        dest[char_index] = src[char_index];
+    }
+    dest[length] = 0;
+}
+
+static void notify_or_update_online_stream(char *name, char *game)
+{
+    __debugbreak();
+}
+
+static void win32_update_streams(void *data, unsigned int data_size)
 {
     char *json_string = (char *)data;
-    JsonParser parser;
     JsonToken tokens[1024] = {};
+    JsonParser parser;
 
     json_init_parser(&parser, tokens, array_count(tokens));
     json_parse(&parser, (char *)data, data_size);
 
-    if (tokens[0].type == JsonType_Object)
+    for (JsonIterator root_iterator = json_iterator_get(&parser, 0); json_iterator_valid(root_iterator); root_iterator = json_iterator_next(root_iterator))
     {
-        for (JsonIterator root_iterator = json_iterator_get(&parser, 0); json_iterator_valid(root_iterator); root_iterator = json_iterator_next(root_iterator))
+        JsonToken *identifier = json_get_token(root_iterator);
+        JsonToken *value = json_peek_next_token(root_iterator);
+        
+        if (value && value->type == JsonType_Array && json_string_token_equals(json_string, identifier, "streams"))
         {
-            JsonToken *identifier = json_get_token(root_iterator);
-            JsonToken *value = json_get_next_token(root_iterator);
-            
-            if (value)
+            for (JsonIterator streams_iterator = json_iterator_get(&parser, value); json_iterator_valid(streams_iterator); streams_iterator = json_iterator_next(streams_iterator))
             {
-                // NOTE(dan): we are in the root and have {"_total": int, "streams": Array, "links": Object}
-                if (identifier->type == JsonType_String)
-                {
-                    if (value->type == JsonType_Primitive && json_string_token_equals(json_string, root_iterator.at, "_total"))
-                    {
-                        char *total = json_string + value->start;
-                        i32 total_value = read_i32_from_string(total, value->end - value->start);
+                JsonToken *stream = json_get_token(streams_iterator);
+                char name[256];
+                char game[256];
 
-                    }
-                    else if (value->type == JsonType_Array && json_string_token_equals(json_string, root_iterator.at, "streams"))
+                for (JsonIterator stream_iterator = json_iterator_get(&parser, stream); json_iterator_valid(stream_iterator); stream_iterator = json_iterator_next(stream_iterator))
+                {
+                    JsonToken *ident = json_get_token(stream_iterator);
+                    JsonToken *val = json_peek_next_token(stream_iterator);
+
+                    if (val && val->type == JsonType_String && json_string_token_equals(json_string, ident, "game"))
                     {
-                        char *streams = json_string + value->start;
+                        char *game_src = json_string + val->start;
+                        i32 game_length = val->end - val->start;
+                        copy_string_and_null_terminate(game_src, game, game_length);
+                    }
+                    else if (val && val->type == JsonType_Object && json_string_token_equals(json_string, ident, "channel"))
+                    {
+                        for (JsonIterator channel_iterator = json_iterator_get(&parser, val); json_iterator_valid(channel_iterator); channel_iterator = json_iterator_next(channel_iterator))
+                        {
+                            JsonToken *i = json_get_token(channel_iterator);
+                            JsonToken *v = json_peek_next_token(channel_iterator);
+
+                            if (v && v->type == JsonType_String && json_string_token_equals(json_string, i, "name"))
+                            {
+                                char *name_src = json_string + v->start;
+                                i32 name_length = v->end - v->start;
+                                copy_string_and_null_terminate(name_src, name, name_length);
+                            }
+                        }
                     }
                 }
+
+                notify_or_update_online_stream(name, game);
             }
         }
     }
@@ -483,7 +530,7 @@ static void win32_parse_json(void *data, unsigned int data_size)
 
 static void win32_update(HINTERNET internet, void *data, unsigned int data_size)
 {
-    char *url = "https://api.twitch.tv/kraken/streams?channel=gyilokeu,ikszes";
+    char *url = "https://api.twitch.tv/kraken/streams?channel=ziqoftw,venruki";
     char *headers = "Client-ID: j6dzqx92ht08vnyr1ghz0a1fdw6oss";
 
     HINTERNET connection = InternetOpenUrlA(internet, url, headers, (unsigned int)-1, INTERNET_FLAG_EXISTING_CONNECT | INTERNET_FLAG_KEEP_CONNECTION | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE, 0);
@@ -502,7 +549,7 @@ static void win32_update(HINTERNET internet, void *data, unsigned int data_size)
             total_bytes_read += bytes_read;
         }
 
-        win32_parse_json(data, total_bytes_read);
+        win32_update_streams(data, total_bytes_read);
 
         InternetCloseHandle(connection);
     }
