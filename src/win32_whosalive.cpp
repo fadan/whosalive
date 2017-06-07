@@ -12,8 +12,14 @@
 
 struct Win32Window
 {
+    b32 popup;
     char *title;
     char *class_name;
+    u32 style;
+    u32 x;
+    u32 y;
+    u32 width;
+    u32 height;
     HWND hwnd;
     WNDPROC wnd_proc;
 };
@@ -21,6 +27,7 @@ struct Win32Window
 struct Win32State
 {
     Win32Window window;
+    Win32Window overlay;
     b32 initialized;
 
     b32 quit_requested;
@@ -30,20 +37,26 @@ static Win32State global_win32_state_;
 static Win32State *global_win32_state = &global_win32_state_;
 
 static HANDLE global_update_event;
+static HICON global_tray_icon;
 
 static void win32_init_window(Win32Window *window)
 {
     WNDCLASSEXA window_class = {0};
     window_class.cbSize = sizeof(window_class);
-    window_class.hInstance = GetModuleHandleA(0);
+    window_class.style = CS_HREDRAW | CS_VREDRAW;
     window_class.lpfnWndProc = window->wnd_proc;
-    window_class.lpszClassName = (window->class_name) ? window->class_name : window->title;
+    window_class.hInstance = GetModuleHandleA(0);
+    window_class.lpszClassName = window->class_name;
 
     if (RegisterClassExA(&window_class))
     {
-        window->hwnd = CreateWindowExA(0, window_class.lpszClassName, window->title, WS_OVERLAPPEDWINDOW, 
-                                       CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
-                                       0, 0, window_class.hInstance, 0);
+        u32 style = (window->popup) ? WS_POPUP | WS_VISIBLE : WS_OVERLAPPEDWINDOW;
+        u32 width = (window->width) ? window->width : CW_USEDEFAULT;
+        u32 height = (window->height) ? window->height : CW_USEDEFAULT;
+
+        window->hwnd = CreateWindowExA(window->style, window_class.lpszClassName, window->title, 
+                                       style, window->x, window->y, width, height, 0, 0, 
+                                       window_class.hInstance, 0);
     }
 }
 
@@ -112,8 +125,8 @@ inline void copy_string_and_null_terminate(char *src, char *dest, i32 length)
 
 static char check_for_streams[2][128] =
 {
-    "ziqoftw",
-    "slootbag",
+    "venruki",
+    "handmadehero",
 };
 
 struct Stream
@@ -202,6 +215,10 @@ static void pre_update_streams()
         stream->online = false;
     }
 }
+static void win32_show_notification(char *title, char *message)
+{
+    
+}
 
 static void notify_or_update_online_stream(char *name, char *game)
 {
@@ -211,8 +228,18 @@ static void notify_or_update_online_stream(char *name, char *game)
         stream->online = true;
         if (!stream->was_online)
         {
-            // NOTE(dan): went online
-            __debugbreak();
+            // TODO(dan): this garbage is only for test
+            char title[64];
+            u32 name_length = string_length(stream->name);
+            copy_string(stream->name, title);
+
+            copy_string(" started streaming", title + name_length);
+
+            char message[256];
+            copy_string("Playing: ", message);
+            copy_string(game, message + 9);
+
+            win32_show_notification(title, message);
         }
     }
 }
@@ -351,13 +378,105 @@ static void win32_init_update_thread(Win32State *state)
     }
 }
 
+static intptr __stdcall win32_overlay_window_proc(HWND wnd, unsigned int message, uintptr wparam, intptr lparam)
+{
+    intptr result = 0;
+    // switch (message)
+    // {
+        // default:
+        // {
+            result = DefWindowProcA(wnd, message, wparam, lparam);
+        // } break;
+    // }
+    return result;
+}
+
+static void win32_create_dib_section(Win32Window *window)
+{
+    BITMAPINFO bitmap_info = {0};
+    bitmap_info.bmiHeader.biSize = sizeof(bitmap_info);
+    bitmap_info.bmiHeader.biWidth = window->width;
+    bitmap_info.bmiHeader.biHeight = -(long)window->height;
+    bitmap_info.bmiHeader.biPlanes = 1;
+    bitmap_info.bmiHeader.biBitCount = 32;
+    bitmap_info.bmiHeader.biCompression = BI_RGB;
+
+    void *image;
+    HDC dc = GetDC(0);
+    HBITMAP bitmap = CreateDIBSection(dc, &bitmap_info, DIB_RGB_COLORS, &image, 0, 0);
+    ReleaseDC(0, dc);
+
+    if (image)
+    {
+        i32 bytes_per_pixel = 4;
+        i32 bytes_per_line = window->width * bytes_per_pixel;
+
+        i32 stride = -bytes_per_line;
+        i32 total_size = window->height * bytes_per_line;
+
+        u8 *top_left_corner = (u8 *)image + total_size - bytes_per_line;
+
+        for (u32 y = 0; y < window->height; ++y)
+        {
+            for (u32 x = 0; x < window->width; ++x)
+            {
+                i32 y_col = y * stride;
+                u32 x_col = x * bytes_per_pixel;
+
+                u32 *pixel = (u32 *)(top_left_corner + y_col + x_col);
+
+                *pixel = 0xFFFFFFFF;
+            }
+        }
+
+        HDC dc = GetDC(0);
+        HDC compatible_dc = CreateCompatibleDC(dc);
+        HBITMAP old = (HBITMAP)SelectObject(compatible_dc, bitmap);
+
+        BLENDFUNCTION blend_func = {0};
+        blend_func.BlendOp = AC_SRC_OVER;
+        blend_func.SourceConstantAlpha = 255;
+        blend_func.AlphaFormat = AC_SRC_ALPHA;
+
+        RECT client_rect;
+        GetClientRect(window->hwnd, &client_rect);
+        
+        POINT position = {};
+
+        POINT origin = {0};
+        SIZE size = { client_rect.right, client_rect.bottom };
+
+        UpdateLayeredWindow(window->hwnd, dc, 0, &size, compatible_dc, &origin, 0, &blend_func, ULW_ALPHA);
+
+        ReleaseDC(0, dc);
+    }
+}
+
 int __stdcall WinMain(HINSTANCE instance, HINSTANCE prev_instance, char *cmd_line, int cmd_show)
 {
     Win32State *state = global_win32_state;
 
+    state->window.class_name = "WhosAliveWindowClassName";
     state->window.title = "WhosAlive";
     state->window.wnd_proc = win32_window_proc;
     win32_init_window(&state->window);
+
+    POINT zero = {0};
+    HMONITOR monitor = MonitorFromPoint(zero, MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFO monitor_info = { sizeof(monitor_info) };
+    GetMonitorInfo(monitor, &monitor_info);
+
+    state->overlay.width = 300;
+    state->overlay.height = 80;
+    state->overlay.x = monitor_info.rcWork.right - state->overlay.width - 20;
+    state->overlay.y = monitor_info.rcWork.bottom - state->overlay.height - 20;
+    state->overlay.style = WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW;
+    state->overlay.class_name = "WhosAliveOverlayClassName";
+    state->overlay.wnd_proc = win32_overlay_window_proc;
+    state->overlay.popup = true;
+    win32_init_window(&state->overlay);
+
+    win32_create_dib_section(&state->overlay);
 
     init_streams();
     init_url();
