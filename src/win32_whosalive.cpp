@@ -7,8 +7,17 @@
 #include <wininet.h>
 
 #define UPDATE_THREAD_TIMER_ID      1
+#define FADER_TIMER_ID              2
 #define UPDATE_THREAD_INTERVAL_MS   (10 * 1000)
 #define MAX_DOWNLOAD_SIZE           (1*MB)
+
+enum Win32WindowState
+{
+    Win32WindowState_Hidden,
+    Win32WindowState_FadingIn,
+    Win32WindowState_Shown,
+    Win32WindowState_FadingOut,
+};
 
 struct Win32Window
 {
@@ -22,6 +31,9 @@ struct Win32Window
     u32 height;
     HWND hwnd;
     WNDPROC wnd_proc;
+
+    Win32WindowState state;
+    i32 alpha;
 };
 
 struct Win32State
@@ -50,7 +62,7 @@ static void win32_init_window(Win32Window *window)
 
     if (RegisterClassExA(&window_class))
     {
-        u32 style = (window->popup) ? WS_POPUP | WS_VISIBLE : WS_OVERLAPPEDWINDOW;
+        u32 style = (window->popup) ? WS_POPUP : WS_OVERLAPPEDWINDOW;
         u32 width = (window->width) ? window->width : CW_USEDEFAULT;
         u32 height = (window->height) ? window->height : CW_USEDEFAULT;
 
@@ -378,16 +390,103 @@ static void win32_init_update_thread(Win32State *state)
     }
 }
 
+static void win32_change_opacity(Win32Window *window, i32 alpha)
+{
+    BLENDFUNCTION blend_func = {0};
+    blend_func.BlendOp = AC_SRC_OVER;
+    blend_func.SourceConstantAlpha = (BYTE)alpha;
+    blend_func.AlphaFormat = AC_SRC_ALPHA;
+
+    UpdateLayeredWindow(window->hwnd, 0, 0, 0, 0, 0, 0, &blend_func, ULW_ALPHA);
+}
+
+static void win32_fading(Win32Window *window)
+{
+    win32_change_opacity(window, window->alpha);
+
+    SetTimer(window->hwnd, FADER_TIMER_ID, 5, 0);
+}
+
+static void win32_fade_in(Win32Window *window)
+{
+    window->alpha = 0;
+    window->state = Win32WindowState_FadingIn;
+
+    win32_change_opacity(window, 0);
+
+    ShowWindow(window->hwnd, SW_SHOW);
+    SetTimer(window->hwnd, FADER_TIMER_ID, 5, 0);
+}
+
+static void win32_fade_out(Win32Window *window)
+{
+    window->state = Win32WindowState_FadingOut;
+
+    SetTimer(window->hwnd, FADER_TIMER_ID, 5000, 0);
+}
+
+static void win32_update_window(Win32Window *window)
+{
+    switch (window->state)
+    {
+        case Win32WindowState_FadingIn:
+        {
+            if (window->alpha == 255)
+            {
+                window->state = Win32WindowState_Shown;
+            }
+            else
+            {
+                // TODO(dan): delta_alpha, float alpha
+                ++window->alpha;
+                if (window->alpha > 255)
+                {
+                    window->alpha = 255;
+                }
+            }
+
+            win32_fading(window);
+        } break;
+
+        case Win32WindowState_FadingOut:
+        {
+            --window->alpha;
+            if (window->alpha < 1)
+            {
+                window->state = Win32WindowState_Hidden;
+            }
+
+            win32_fading(window);
+        } break;
+
+        case Win32WindowState_Shown:
+        {
+            win32_fade_out(window);
+        } break;
+
+        case Win32WindowState_Hidden:
+        {
+            ShowWindow(window->hwnd, SW_HIDE);
+            KillTimer(window->hwnd, FADER_TIMER_ID);
+        } break;
+    }
+}
+
 static intptr __stdcall win32_overlay_window_proc(HWND wnd, unsigned int message, uintptr wparam, intptr lparam)
 {
     intptr result = 0;
-    // switch (message)
-    // {
-        // default:
-        // {
+    switch (message)
+    {
+        case WM_TIMER:
+        {
+            win32_update_window(&global_win32_state->overlay);
+        } break;
+
+        default:
+        {
             result = DefWindowProcA(wnd, message, wparam, lparam);
-        // } break;
-    // }
+        } break;
+    }
     return result;
 }
 
@@ -477,6 +576,7 @@ int __stdcall WinMain(HINSTANCE instance, HINSTANCE prev_instance, char *cmd_lin
     win32_init_window(&state->overlay);
 
     win32_create_dib_section(&state->overlay);
+    win32_fade_in(&state->overlay);
 
     init_streams();
     init_url();
