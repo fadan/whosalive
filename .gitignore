@@ -5,3 +5,4 @@ Debug/*
 *.suo
 *.opensdf
 *.sublime-workspace
+*.res

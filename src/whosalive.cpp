@@ -128,6 +128,13 @@ static void update_streams(void *data, u32 data_size)
                                     i32 display_name_length = v->end - v->start;
                                     copy_string_and_null_terminate(display_name_src, display_name, display_name_length);
                                 }
+                                else if (json_string_token_equals(json_string, i, "logo"))
+                                {
+                                    char *logo_src = json_string + v->start;
+                                    i32 logo_length = v->end - v->start;
+
+                                    // TODO(dan): download/cache logo
+                                }
                             }
                         }
                     }

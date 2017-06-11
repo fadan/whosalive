@@ -397,7 +397,7 @@ static PLATFORM_LOAD_FILE(win32_load_file)
         if (GetFileSizeEx(handle, &large_file_size))
         {
             u32 file_size = (u32)large_file_size.QuadPart;
-            file.contents = VirtualAlloc(0, file_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+            file.contents = win32_allocate(file_size);
             if (file.contents)
             {
                 u32 bytes_read;
@@ -413,6 +413,18 @@ static PLATFORM_LOAD_FILE(win32_load_file)
         }
     }
     return file;
+}
+
+static void win32_init_tray_icon(Win32Window *window)
+{
+    NOTIFYICONDATA notify_icon = {0};
+    notify_icon.cbSize = sizeof(notify_icon);
+    notify_icon.hWnd = window->hwnd;
+    notify_icon.uFlags = NIF_ICON;
+    notify_icon.hIcon = LoadIcon(GetModuleHandleA(0), MAKEINTRESOURCE(101));
+    notify_icon.szTip[0] = '\0';
+
+    Shell_NotifyIcon(NIM_ADD, &notify_icon);
 }
 
 int __stdcall WinMain(HINSTANCE instance, HINSTANCE prev_instance, char *cmd_line, int cmd_show)
@@ -446,6 +458,8 @@ int __stdcall WinMain(HINSTANCE instance, HINSTANCE prev_instance, char *cmd_lin
     global_dib_section = win32_create_dib_section(&state->overlay);
     global_font_22 = win32_create_font("Arial", 22);
     global_font_16 = win32_create_font("Arial", 16);
+
+    win32_init_tray_icon(&state->window);
 
     win32_init_exe_path(state);
 

@@ -56,6 +56,7 @@ set linkflags=-nologo -incremental:no -opt:ref
 :: Build
 ::
 
-cl %cplflags% %projdir%\src\win32_whosalive.cpp -link %linkflags% user32.lib wininet.lib gdi32.lib
+rc -nologo ..\whosalive.rc
+cl %cplflags% %projdir%\src\win32_whosalive.cpp ..\whosalive.res -link %linkflags% user32.lib wininet.lib gdi32.lib shell32.lib
 
 popd
