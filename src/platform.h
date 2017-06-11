@@ -113,3 +113,61 @@ typedef char test_size_usize[sizeof(usize) == sizeof(char *) ? 1 : -1];
 #define GB  (1024LL * MB)
 #define TB  (1024LL * GB)
 
+
+#define PLATFORM_SHOW_NOTIFICATION(name)    void name(char *title, char *message)
+typedef PLATFORM_SHOW_NOTIFICATION(PlatformShowNotification);
+
+struct Platform
+{
+    PlatformShowNotification *show_notification;
+};
+
+extern Platform platform;
+
+
+inline b32 strings_equal(char *a, char *b)
+{
+    b32 equal = (a == b);
+    if (a && b)
+    {
+        while (*a && *b && (*a == *b))
+        {
+            ++a;
+            ++b;
+        }
+        equal = ((*a == 0) && (*b == 0));
+    }
+    return equal;
+}
+
+inline u32 string_length(char *string)
+{
+    u32 length = 0;
+    while (*string++)
+    {
+        ++length;
+    }
+    return length;
+}
+
+inline void copy_string(char *src, char *dest)
+{
+    u32 length = 1;
+    for (char *at = src; *at; ++at)
+    {
+        ++length;
+    }
+    for (u32 char_index = 0; char_index < length; ++char_index)
+    {
+        dest[char_index] = src[char_index];
+    }
+}
+
+inline void copy_string_and_null_terminate(char *src, char *dest, i32 length)
+{
+    for (i32 char_index = 0; char_index < length; ++char_index)
+    {
+        dest[char_index] = src[char_index];
+    }
+    dest[length] = 0;
+}
