@@ -7,6 +7,7 @@
 #define FADER_TIMER_ID              2
 #define UPDATE_THREAD_INTERVAL_MS   (10 * 1000)
 #define MAX_DOWNLOAD_SIZE           (1*MB)
+#define TRAY_ICON_MESSAGE           (WM_USER + 1)
 
 static Win32State global_win32_state_;
 static Win32State *global_win32_state = &global_win32_state_;
@@ -187,6 +188,76 @@ static PLATFORM_SHOW_NOTIFICATION(win32_show_notification)
     win32_fade_in(&global_win32_state->overlay);
 }
 
+enum TrayIconMenuID
+{
+    TrayIconMenuID_Close,
+
+    TrayIconMenuID_Count
+};
+
+static void win32_open_in_browser(i32 stream_index)
+{
+    Stream *stream = streams + stream_index;
+
+    char url[256];
+    wsprintf(url, "https://www.twitch.tv/%s", stream->name);
+
+    ShellExecute(0, "open", url, 0, 0, SW_SHOWNORMAL);
+}
+
+static void win32_create_tray_menu(HWND window)
+{
+    HMENU menu = CreatePopupMenu();
+
+    POINT mouse;
+    GetCursorPos(&mouse);
+
+    for (u32 stream_index = 0; stream_index < num_streams; ++stream_index)
+    {
+        Stream *stream = streams + stream_index;
+        if (stream->online)
+        {
+            i32 cmd_id = TrayIconMenuID_Count + stream_index;
+            AppendMenu(menu, MF_CHECKED, cmd_id, stream->name);
+        }
+    }
+
+    AppendMenu(menu, MF_SEPARATOR, 0, 0);
+
+    for (u32 stream_index = 0; stream_index < num_streams; ++stream_index)
+    {
+        Stream *stream = streams + stream_index;
+        if (!stream->online)
+        {
+            i32 cmd_id = TrayIconMenuID_Count + stream_index;
+            AppendMenu(menu, MF_UNCHECKED, cmd_id, stream->name);
+        }
+    }
+
+    AppendMenu(menu, MF_SEPARATOR, 0, 0);
+    AppendMenu(menu, MF_UNCHECKED, TrayIconMenuID_Close, "Close");
+
+    i32 cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY, mouse.x, mouse.y, 0, window, 0);
+    switch (cmd)
+    {
+        case TrayIconMenuID_Close:
+        {
+            global_win32_state->quit_requested = true;
+        } break;
+
+        default:
+        {
+            if (cmd >= TrayIconMenuID_Count)
+            {
+                u32 stream_index = cmd - TrayIconMenuID_Count;
+                win32_open_in_browser(stream_index);
+            }
+        } break;
+    }
+
+    DestroyMenu(menu);
+}
+
 static intptr __stdcall win32_window_proc(HWND wnd, unsigned int message, uintptr wparam, intptr lparam)
 {
     intptr result = 0;
@@ -202,6 +273,14 @@ static intptr __stdcall win32_window_proc(HWND wnd, unsigned int message, uintpt
             if (wparam == UPDATE_THREAD_TIMER_ID)
             {
                 SetEvent(global_update_event);
+            }
+        } break;
+
+        case TRAY_ICON_MESSAGE:
+        {
+            if (lparam == WM_RBUTTONUP || lparam == WM_LBUTTONUP)
+            {
+                win32_create_tray_menu(wnd);
             }
         } break;
 
@@ -420,7 +499,8 @@ static void win32_init_tray_icon(Win32Window *window)
     NOTIFYICONDATA notify_icon = {0};
     notify_icon.cbSize = sizeof(notify_icon);
     notify_icon.hWnd = window->hwnd;
-    notify_icon.uFlags = NIF_ICON;
+    notify_icon.uFlags = NIF_ICON | NIF_MESSAGE;
+    notify_icon.uCallbackMessage = TRAY_ICON_MESSAGE;
     notify_icon.hIcon = LoadIcon(GetModuleHandleA(0), MAKEINTRESOURCE(101));
     notify_icon.szTip[0] = '\0';
 
