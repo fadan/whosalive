@@ -17,13 +17,6 @@ static Stream streams[64];
 static char *url_base = "https://api.twitch.tv/kraken/streams?channel=";
 static char url[4096];
 
-static char *check_for_streams[] =
-{
-    "belezogep",
-    "handmadehero",
-    "towelliee",
-};
-
 inline Stream *get_stream_by_name(char *name)
 {
     Stream *stream = 0;
@@ -56,43 +49,6 @@ static void notify_or_update_online_stream(char *name, char *game, char *display
             platform.show_notification(title, message);
         }
     }
-}
-
-static void init_streams()
-{
-    num_streams = array_count(check_for_streams);
-    for (u32 stream_index = 0; stream_index < num_streams; ++stream_index)
-    {
-        Stream *stream = streams + stream_index;
-        stream->game[0] = 0;
-        stream->online = false;
-        stream->was_online = false;
-
-        char *name = check_for_streams[stream_index];
-        copy_string(name, stream->name);
-    }
-}
-
-static void init_url()
-{
-    copy_string(url_base, url);
-
-    u32 at = string_length(url_base);
-
-    for (u32 stream_index = 0; stream_index < num_streams; ++stream_index)
-    {
-        Stream *stream = streams + stream_index;
-
-        copy_string(stream->name, url + at);
-
-        at += string_length(stream->name);
-
-        if ((stream_index + 1) < num_streams)
-        {
-            url[at++] = ',';
-        }
-    }
-    url[at] = 0;
 }
 
 static void pre_update_streams()
@@ -181,4 +137,77 @@ static void update_streams(void *data, u32 data_size)
             }
         }
     }
+}
+
+static void add_stream(char *name, u32 name_length)
+{
+    assert(num_streams < array_count(streams));
+    Stream *stream = streams + num_streams++;
+    stream->game[0] = 0;
+    stream->online = false;
+    stream->was_online = false;
+
+    copy_string_and_null_terminate(name, stream->name, name_length);
+}
+
+static void load_streams(char *filename)
+{
+    LoadedFile file = platform.load_file(filename);
+    char *data = (char *)file.contents;
+    u32 begin = 0;
+
+    while (begin < file.size)
+    {
+        u32 end = begin;
+        while (end < file.size && data[end] != '\n' && data[end] != '\r')
+        {
+            ++end;
+        }
+
+        char *stream_name = data + begin;
+        u32 stream_name_length = end - begin;
+
+        if (stream_name_length > 0)
+        {
+            add_stream(stream_name, stream_name_length);
+        }
+
+        while (end < file.size && (data[end] == '\n' || data[end] == '\r'))
+        {
+            ++end;
+        }
+
+        begin = end;
+    }
+
+    platform.unload_file(file);
+}
+
+static void init_url()
+{
+    copy_string(url_base, url);
+
+    u32 at = string_length(url_base);
+
+    for (u32 stream_index = 0; stream_index < num_streams; ++stream_index)
+    {
+        Stream *stream = streams + stream_index;
+
+        copy_string(stream->name, url + at);
+
+        at += string_length(stream->name);
+
+        if ((stream_index + 1) < num_streams)
+        {
+            url[at++] = ',';
+        }
+    }
+    url[at] = 0;
+}
+
+static void init_streams(char *streams_filename)
+{
+    load_streams(streams_filename);
+
+    init_url();
 }

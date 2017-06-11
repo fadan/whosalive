@@ -113,13 +113,25 @@ typedef char test_size_usize[sizeof(usize) == sizeof(char *) ? 1 : -1];
 #define GB  (1024LL * MB)
 #define TB  (1024LL * GB)
 
+struct LoadedFile
+{
+    u32 size;
+    void *contents;
+};
 
 #define PLATFORM_SHOW_NOTIFICATION(name)    void name(char *title, char *message)
+#define PLATFORM_UNLOAD_FILE(name)          void name(LoadedFile file)
+#define PLATFORM_LOAD_FILE(name)            LoadedFile name(char *filename)
+
 typedef PLATFORM_SHOW_NOTIFICATION(PlatformShowNotification);
+typedef PLATFORM_UNLOAD_FILE(PlatformUnloadFile);
+typedef PLATFORM_LOAD_FILE(PlatformLoadFile);
 
 struct Platform
 {
     PlatformShowNotification *show_notification;
+    PlatformLoadFile *load_file;
+    PlatformUnloadFile *unload_file;
 };
 
 extern Platform platform;

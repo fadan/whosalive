@@ -87,7 +87,6 @@ static void win32_update_window(Win32Window *window)
             }
             else
             {
-                // TODO(dan): delta_alpha, float alpha
                 ++window->alpha;
                 if (window->alpha > 255)
                 {
@@ -340,11 +339,89 @@ static HFONT win32_create_font(char *font_name, i32 height)
     return font;
 }
 
+static void win32_build_filename(char *pathname, u32 pathname_size,
+                                 char *filename, u32 filename_size, 
+                                 char *out, u32 max_out_size)
+{
+    if ((pathname_size + filename_size + 1) < max_out_size)
+    {
+        u32 out_index = 0;
+        for (u32 char_index = 0; char_index < pathname_size; ++char_index)
+        {
+            out[out_index++] = pathname[char_index];
+        }
+        for (u32 char_index = 0; char_index < filename_size; ++char_index)
+        {
+            out[out_index++] = filename[char_index];
+        }
+        out[out_index] = '\0';
+    }
+}
+
+static void win32_init_exe_path(Win32State *state)
+{
+    state->exe_filename_length = GetModuleFileNameA(0, state->exe_filename, sizeof(state->exe_filename));
+    state->exe_path_length = state->exe_filename_length;
+
+    for (u32 char_index = state->exe_path_length - 1; char_index > 0; --char_index)
+    {
+        if (*(state->exe_filename + char_index) == '\\')
+        {
+            state->exe_path_length = char_index + 1;
+            break;
+        }
+    }
+
+    char streams_filename[] = "streams.txt";
+    win32_build_filename(state->exe_filename, state->exe_path_length,
+                         streams_filename, array_count(streams_filename),
+                         state->streams_filename, MAX_FILENAME_SIZE);
+}
+
+static PLATFORM_UNLOAD_FILE(win32_unload_file)
+{
+    if (file.contents)
+    {
+        VirtualFree(file.contents, 0, MEM_RELEASE);
+        file.contents = 0;
+    }
+}
+
+static PLATFORM_LOAD_FILE(win32_load_file)
+{
+    LoadedFile file = {0};
+    HANDLE handle = CreateFileA(filename, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, 0, 0);
+    if (handle != INVALID_HANDLE_VALUE)
+    {
+        LARGE_INTEGER large_file_size;
+        if (GetFileSizeEx(handle, &large_file_size))
+        {
+            u32 file_size = (u32)large_file_size.QuadPart;
+            file.contents = VirtualAlloc(0, file_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+            if (file.contents)
+            {
+                u32 bytes_read;
+                if (ReadFile(handle, file.contents, file_size, (DWORD *)&bytes_read, 0) && file_size == bytes_read)
+                {
+                    file.size = file_size;
+                }
+                else
+                {
+                    win32_unload_file(file);
+                }
+            }
+        }
+    }
+    return file;
+}
+
 int __stdcall WinMain(HINSTANCE instance, HINSTANCE prev_instance, char *cmd_line, int cmd_show)
 {
     Win32State *state = global_win32_state;
 
     platform.show_notification = win32_show_notification;
+    platform.load_file = win32_load_file;
+    platform.unload_file = win32_unload_file;
 
     state->window.class_name = "WhosAliveWindowClassName";
     state->window.title = "WhosAlive";
@@ -370,8 +447,9 @@ int __stdcall WinMain(HINSTANCE instance, HINSTANCE prev_instance, char *cmd_lin
     global_font_22 = win32_create_font("Arial", 22);
     global_font_16 = win32_create_font("Arial", 16);
 
-    init_streams();
-    init_url();
+    win32_init_exe_path(state);
+
+    init_streams(state->streams_filename);
 
     win32_init_update_thread(state);
 

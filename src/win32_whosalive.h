@@ -26,11 +26,18 @@ struct Win32Window
     i32 alpha;
 };
 
+#define MAX_FILENAME_SIZE 260
+
 struct Win32State
 {
     Win32Window window;
     Win32Window overlay;
     b32 initialized;
+
+    u32 exe_filename_length;
+    u32 exe_path_length;
+    char exe_filename[MAX_FILENAME_SIZE];
+    char streams_filename[MAX_FILENAME_SIZE];
 
     b32 quit_requested;
 };
