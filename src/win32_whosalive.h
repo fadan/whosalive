@@ -36,8 +36,10 @@ struct Win32State
 
     u32 exe_filename_length;
     u32 exe_path_length;
+    u32 temp_path_length;
     char exe_filename[MAX_FILENAME_SIZE];
     char streams_filename[MAX_FILENAME_SIZE];
+    char temp_path[MAX_FILENAME_SIZE];
 
     b32 quit_requested;
 };

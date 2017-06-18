@@ -4,6 +4,8 @@
 
 struct Stream
 {
+    u32 logo_hash;
+
     char name[128];
     char game[128];
 
@@ -32,7 +34,17 @@ inline Stream *get_stream_by_name(char *name)
     return stream;
 }
 
-static void notify_or_update_online_stream(char *name, char *game, char *display_name)
+static u32 djb2_hash(char *string)
+{
+    u32 hash = 5381;
+    for (char *at = string; *at; ++at)
+    {
+        hash = ((hash << 5) + hash) + *at;
+    }
+    return hash;
+}
+
+static void notify_or_update_online_stream(char *name, char *game, char *display_name, char *logo_url)
 {
     Stream *stream = get_stream_by_name(name);
     if (stream)
@@ -46,7 +58,10 @@ static void notify_or_update_online_stream(char *name, char *game, char *display
             char message[256];
             wsprintf(message, "Playing: %s", game);
 
-            platform.show_notification(title, message);
+            stream->logo_hash = djb2_hash(logo_url);
+            platform.cache_logo(logo_url, stream->logo_hash);
+
+            platform.show_notification(title, message, stream->logo_hash);
         }
     }
 }
@@ -90,10 +105,12 @@ static void update_streams(void *data, u32 data_size)
                 JsonToken *stream = json_get_token(streams_iterator);
                 char name[256];
                 char game[256];
+                char logo[512];
                 char display_name[256];
 
                 name[0] = 0;
                 game[0] = 0;
+                logo[0] = 0;
                 display_name[0] = 0;
 
                 for (JsonIterator stream_iterator = json_iterator_get(&parser, stream); json_iterator_valid(stream_iterator); stream_iterator = json_iterator_next(stream_iterator))
@@ -132,15 +149,14 @@ static void update_streams(void *data, u32 data_size)
                                 {
                                     char *logo_src = json_string + v->start;
                                     i32 logo_length = v->end - v->start;
-
-                                    // TODO(dan): download/cache logo
+                                    copy_string_and_null_terminate(logo_src, logo, logo_length);
                                 }
                             }
                         }
                     }
                 }
 
-                notify_or_update_online_stream(name, game, display_name);
+                notify_or_update_online_stream(name, game, display_name, logo);
             }
         }
     }

@@ -119,23 +119,25 @@ struct LoadedFile
     void *contents;
 };
 
-#define PLATFORM_SHOW_NOTIFICATION(name)    void name(char *title, char *message)
+#define PLATFORM_SHOW_NOTIFICATION(name)    void name(char *title, char *message, u32 logo_hash)
 #define PLATFORM_UNLOAD_FILE(name)          void name(LoadedFile file)
 #define PLATFORM_LOAD_FILE(name)            LoadedFile name(char *filename)
+#define PLATFORM_CACHE_LOGO(name)           void name(char *url, u32 logo_hash)
 
 typedef PLATFORM_SHOW_NOTIFICATION(PlatformShowNotification);
 typedef PLATFORM_UNLOAD_FILE(PlatformUnloadFile);
 typedef PLATFORM_LOAD_FILE(PlatformLoadFile);
+typedef PLATFORM_CACHE_LOGO(PlatformCacheLogo);
 
 struct Platform
 {
     PlatformShowNotification *show_notification;
     PlatformLoadFile *load_file;
     PlatformUnloadFile *unload_file;
+    PlatformCacheLogo *cache_logo;
 };
 
 extern Platform platform;
-
 
 inline b32 strings_equal(char *a, char *b)
 {
