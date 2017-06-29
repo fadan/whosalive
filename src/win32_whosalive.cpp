@@ -40,10 +40,7 @@ static Win32State *global_win32_state = &global_win32_state_;
 
 static HINTERNET global_internet;
 static HANDLE global_update_event;
-static HICON global_tray_icon;
-static HFONT global_font_22;
-static HFONT global_font_16;
-static Win32DibSection global_dib_section;
+static Win32Overlay global_overlay;
 
 Platform platform;
 
@@ -162,22 +159,6 @@ static void win32_update_window(Win32Window *window)
     }
 }
 
-static void win32_clear(Win32DibSection *dib_section, u32 color)
-{
-    for (u32 y = 0; y < dib_section->height; ++y)
-    {
-        for (u32 x = 0; x < dib_section->width; ++x)
-        {
-            i32 y_col = y * dib_section->stride;
-            u32 x_col = x * dib_section->bytes_per_pixel;
-
-            u32 *pixel = (u32 *)(dib_section->top_left_corner + y_col + x_col);
-
-            *pixel = color;
-        }
-    }
-}
-
 enum TrayIconMenuID
 {
     TrayIconMenuID_CloseMenu,
@@ -234,6 +215,7 @@ static void win32_create_tray_menu(HWND window)
         case TrayIconMenuID_Exit:
         {
             global_win32_state->quit_requested = true;
+            PostQuitMessage(0);
         } break;
 
         default:
@@ -415,131 +397,168 @@ static void win32_init_paths(Win32State *state)
     CreateDirectory(state->temp_path, 0);
 }
 
-static Win32DibSection win32_create_dib_section(Win32Window *window)
+static Win32Overlay win32_create_overlay(int width, int height)
 {
-    Win32DibSection dib_section = {0};
-    dib_section.width = window->width;
-    dib_section.height = window->height;
-
     BITMAPINFO bitmap_info = {0};
     bitmap_info.bmiHeader.biSize = sizeof(bitmap_info);
-    bitmap_info.bmiHeader.biWidth = dib_section.width;
-    bitmap_info.bmiHeader.biHeight = -(long)dib_section.height;
+    bitmap_info.bmiHeader.biWidth = width;
+    bitmap_info.bmiHeader.biHeight = height;
     bitmap_info.bmiHeader.biPlanes = 1;
     bitmap_info.bmiHeader.biBitCount = 32;
     bitmap_info.bmiHeader.biCompression = BI_RGB;
 
-    dib_section.dc = CreateCompatibleDC(0);
+    HDC screen_dc = GetDC(0);
 
-    void *image;
-    HDC dc = GetDC(0);
-    dib_section.bitmap = CreateDIBSection(dc, &bitmap_info, DIB_RGB_COLORS, &image, 0, 0);
+    void *pixels;
+    Win32Overlay overlay = {0};
+    overlay.width = width;
+    overlay.height = height;
+    overlay.bitmap = CreateDIBSection(screen_dc, &bitmap_info, DIB_RGB_COLORS, &pixels, 0, 0);
+    overlay.draw_dc = CreateCompatibleDC(screen_dc);
+    overlay.stride = -width * 4;
+    overlay.top_left_corner = (unsigned char *)pixels + (height - 1) * (width * 4);
+    overlay.header_font = CreateFont(18, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FW_DONTCARE, "Arial");
+    overlay.message_font = CreateFont(16, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FW_DONTCARE, "Arial");
 
-    if (dib_section.bitmap)
+    ReleaseDC(0, screen_dc);
+    return overlay;
+}
+
+inline void win32_set_pixel(Win32Overlay *overlay, int x, int y, unsigned int color)
+{
+    assert(x < overlay->width);
+    assert(y < overlay->height);
+
+    int row = y * overlay->stride;
+    int col = x * 4;
+
+    unsigned int *pixel = (unsigned int *)(overlay->top_left_corner + row + col);
+    *pixel = color;
+}
+
+static void win32_create_overlay_graphics(Win32Overlay *overlay, char *header, char *message, u32 logo_hash)
+{
+    SelectObject(overlay->draw_dc, overlay->bitmap);
+
+    // NOTE(dan): background
+    for (int y = 0; y < overlay->height; ++y)
     {
+        for (int x = 0; x < overlay->width; ++x)
+        {
+            int row = y * overlay->stride;
+            int col = x * 4;
 
-        dib_section.bytes_per_pixel = 4;
-        dib_section.bytes_per_line = dib_section.width * dib_section.bytes_per_pixel;
-        dib_section.stride = -dib_section.bytes_per_line;
-        dib_section.total_size = dib_section.height * dib_section.bytes_per_line;
-        dib_section.top_left_corner = (u8 *)image + dib_section.total_size - dib_section.bytes_per_line;
+            unsigned int *pixel = (unsigned int *)(overlay->top_left_corner + row + col);
+            *pixel = 0xFFFFFFFF;
+        }
     }
 
-    ReleaseDC(0, dc);
+    // NOTE(dan): top-left corner
+    win32_set_pixel(overlay, 0, 0, 0x00000000);
+    win32_set_pixel(overlay, 1, 0, 0x60d6dadb);
+    win32_set_pixel(overlay, 0, 1, 0x60d6dadb);
 
-    return dib_section;
-}
+    // NOTE(dan): top-right corner
+    win32_set_pixel(overlay, overlay->width - 1, 0, 0x00000000);
+    win32_set_pixel(overlay, overlay->width - 2, 0, 0x60d6dadb);
+    win32_set_pixel(overlay, overlay->width - 1, 1, 0x60d6dadb);
 
-static HFONT win32_create_font(char *font_name, i32 height)
-{
-    HFONT font = CreateFont(height, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, 
-                            CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FW_DONTCARE, font_name);
-    return font;
-}
+    // NOTE(dan): bottom-left corner
+    win32_set_pixel(overlay, 0, overlay->height - 1, 0x00000000);
+    win32_set_pixel(overlay, 1, overlay->height - 1, 0x60d6dadb);
+    win32_set_pixel(overlay, 0, overlay->height - 2, 0x60d6dadb);
 
-static PLATFORM_SHOW_NOTIFICATION(win32_show_notification)
-{
-    Win32DibSection dib_section = global_dib_section;
-    Win32Window *window = &global_win32_state->overlay;
+    // NOTE(dan): bottom-right corner
+    win32_set_pixel(overlay, overlay->width - 1, overlay->height - 1, 0x00000000);
+    win32_set_pixel(overlay, overlay->width - 2, overlay->height - 1, 0x60d6dadb);
+    win32_set_pixel(overlay, overlay->width - 1, overlay->height - 2, 0x60d6dadb);
+
+    // NOTE(dan): header
+    SelectObject(overlay->draw_dc, overlay->header_font);
+    SetTextColor(overlay->draw_dc, 0xFF454545);
 
     RECT text_rect = {0};
     text_rect.top = 10;
     text_rect.left = 80;
-    text_rect.right = global_dib_section.width - 10;
-    text_rect.bottom = global_dib_section.height - 15;
+    text_rect.right = overlay->width - 10;
+    text_rect.bottom = overlay->height - 10;
 
-    SelectObject(dib_section.dc, dib_section.bitmap);
+    DrawText(overlay->draw_dc, header, string_length(header), &text_rect, DT_LEFT | DT_SINGLELINE);
 
-    win32_clear(&dib_section, 0xFFFFFFFF);
+    // NOTE(dan): message
+    SelectObject(overlay->draw_dc, overlay->message_font);
+    SetTextColor(overlay->draw_dc, 0xFF878787);
+
+    TEXTMETRIC text_metric;
+    GetTextMetrics(overlay->draw_dc, &text_metric);
+
+    text_rect.top += text_metric.tmHeight + 10;
+    DrawText(overlay->draw_dc, message, string_length(message), &text_rect, DT_LEFT | DT_SINGLELINE);
 
     // NOTE(dan): logo
-
-    BITMAPINFO bitmap_info = {0};
-    bitmap_info.bmiHeader.biSize = sizeof(bitmap_info);
-    bitmap_info.bmiHeader.biWidth = 60;
-    bitmap_info.bmiHeader.biHeight = -(long)60;
-    bitmap_info.bmiHeader.biPlanes = 1;
-    bitmap_info.bmiHeader.biBitCount = 32;
-    bitmap_info.bmiHeader.biCompression = BI_RGB;
+    SelectObject(overlay->draw_dc, overlay->bitmap);
 
     char filename[32];
-    wsprintf(filename, "%u.bmp", logo_hash);
+    wsprintf(filename, "%u.png", logo_hash);
 
     char path_to_file[MAX_FILENAME_SIZE];
     win32_build_filename(global_win32_state->temp_path, global_win32_state->temp_path_length,
-                         filename, string_length(filename), 
+                         filename, string_length(filename),
                          path_to_file, array_count(path_to_file));
-
+    
+    int logo_width, logo_height, n;
     LoadedFile logo = platform.load_file(path_to_file);
+    if (logo.contents)
+    {
+        unsigned char *image = stbi_load_from_memory((unsigned char *)logo.contents, logo.size, &logo_width, &logo_height, &n, 0);
+        if (image)
+        {
+            int top_left_x = 10;
+            int top_left_y = 10;
 
-    HDC screen_dc = GetDC(0);
-    HDC logo_dc = CreateCompatibleDC(screen_dc);
-    HBITMAP logo_bitmap = CreateDIBSection(screen_dc, &bitmap_info, DIB_RGB_COLORS, (void **)&logo.contents, 0, 0);
-    HBITMAP old_bitmap = (HBITMAP)SelectObject(logo_dc, logo_bitmap);
+            for (int y = 0; y < logo_height; ++y)
+            {
+                for (int x = 0; x < logo_width; ++x)
+                {
+                    int src_row = y * logo_width * n;
+                    int src_col = x * n;
+                    unsigned int *src_pixel = (unsigned int *)(image + src_row + src_col);
 
-    BitBlt(dib_section.dc, 10, 10, 60, 60, logo_dc, 0, 0, SRCCOPY);
+                    int dest_row = (top_left_y + y) * overlay->stride;
+                    int dest_col = (top_left_x + x) * 4;
+                    unsigned int *dest_pixel = (unsigned int *)(overlay->top_left_corner + dest_row + dest_col);
 
-    SelectObject(logo_dc, old_bitmap);
-    DeleteDC(logo_dc);
-    ReleaseDC(0, screen_dc);
+                    *dest_pixel = *src_pixel;
+                }
+            }
+            stbi_image_free(image);
+        }
+        platform.unload_file(logo);
+    }
+}
 
-    platform.unload_file(logo);
+static PLATFORM_SHOW_NOTIFICATION(win32_show_notification)
+{
+    Win32Overlay *overlay = &global_overlay;
+    Win32Window *window = &global_win32_state->overlay;
 
-    // NOTE(dan): text
+    win32_create_overlay_graphics(overlay, title, message, logo_hash);
 
-    SelectObject(dib_section.dc, global_font_22);
-    SetTextColor(dib_section.dc, 0xFF3C3C3C);
-    DrawText(dib_section.dc, title, string_length(title), &text_rect, DT_LEFT);
-
-    TEXTMETRIC text_metric;
-    GetTextMetrics(dib_section.dc, &text_metric);
-
-    text_rect.top += text_metric.tmHeight;
-
-    SelectObject(dib_section.dc, global_font_16);
-    SetBkMode(dib_section.dc, OPAQUE);
-    // SetTextColor(dib_section.dc, 0xFF666666);
-    SetTextColor(dib_section.dc, 0xFFFFFF00);
-    DrawText(dib_section.dc, message, string_length(message), &text_rect, DT_LEFT | DT_BOTTOM | DT_SINGLELINE);
+    SIZE size = {overlay->width, overlay->height};
+    POINT zero = {0};
 
     BLENDFUNCTION blend_func = {0};
     blend_func.BlendOp = AC_SRC_OVER;
     blend_func.SourceConstantAlpha = 255;
     blend_func.AlphaFormat = AC_SRC_ALPHA;
 
-    RECT client_rect;
-    GetClientRect(window->hwnd, &client_rect);
-    
-    POINT position = {};
+    SelectObject(overlay->draw_dc, overlay->bitmap);
 
-    POINT origin = {0};
-    SIZE size = { client_rect.right, client_rect.bottom };
+    HDC screen_dc = GetDC(0);
+    UpdateLayeredWindow(window->hwnd, screen_dc, 0, &size, overlay->draw_dc, &zero, RGB(0, 0, 0), &blend_func, ULW_ALPHA);
+    ReleaseDC(0, screen_dc);
 
-    HDC dc = GetDC(0);
-    UpdateLayeredWindow(window->hwnd, dc, 0, &size, dib_section.dc, &origin, 0, &blend_func, ULW_ALPHA);
-    ReleaseDC(0, dc);
-
-    win32_fade_in(&global_win32_state->overlay);
+    win32_fade_in(window);
 }
 
 static void win32_free(void *memory)
@@ -618,7 +637,7 @@ static void *global_download_buffer;
 static PLATFORM_CACHE_LOGO(win32_cache_logo)
 {
     char filename[32];
-    wsprintf(filename, "%u.bmp", logo_hash);
+    wsprintf(filename, "%u.png", logo_hash);
 
     char path_to_file[MAX_FILENAME_SIZE];
     win32_build_filename(global_win32_state->temp_path, global_win32_state->temp_path_length,
@@ -658,7 +677,7 @@ static PLATFORM_CACHE_LOGO(win32_cache_logo)
                                    resized_image, 60, 60, 0,
                                    n);
 
-                stbi_write_bmp(path_to_file, 60, 60, n, resized_image);
+                stbi_write_png(path_to_file, 60, 60, n, resized_image, 0);
                 stbi_image_free(image);
                 win32_free(resized_image);
             }
@@ -667,93 +686,6 @@ static PLATFORM_CACHE_LOGO(win32_cache_logo)
         }
     }
 }
-
-// static PLATFORM_OPEN_TEMP_FILE(win32_open_temp_file)
-// {
-//     PlatformFile temp_file = {0};
-
-//     char path_to_file[MAX_FILENAME_SIZE];
-//     win32_build_filename(global_win32_state->temp_path, global_win32_state->temp_path_length,
-//                          filename, string_length(filename), 
-//                          path_to_file, array_count(path_to_file));
-
-//     WIN32_FILE_ATTRIBUTE_DATA data;
-//     u32 creation_flags = OPEN_EXISTING;
-//     if (!GetFileAttributesEx(path_to_file, GetFileExInfoStandard, &data))
-//     {
-//         creation_flags = CREATE_NEW;
-//         temp_file.created = true;
-//     }
-//     else
-//     {
-//         FILETIME current_time;
-//         GetSystemTimeAsFileTime(&current_time);
-
-//         u64 last_write = ((u64)data.ftLastWriteTime.dwHighDateTime << 32) + data.ftLastWriteTime.dwLowDateTime;
-//         u64 now = ((u64)current_time.dwHighDateTime << 32) + current_time.dwLowDateTime;
-//         u64 expires = last_write + LOGO_EXPIRES_NS;
-
-//         if (expires < now)
-//         {
-//             temp_file.created = true;
-//             creation_flags = TRUNCATE_EXISTING;
-//         }
-//     }
-
-//     temp_file.reserved_for_platform = CreateFileA(path_to_file, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, 0, creation_flags, 0, 0);
-//     assert(temp_file.reserved_for_platform != INVALID_HANDLE_VALUE);
-
-//     return temp_file;
-// }
-
-// static void *global_download_buffer;
-
-// static PLATFORM_DOWNLOAD_URL_TO_FILE(win32_download_url_to_file)
-// {
-//     b32 downloaded = false;
-
-//     if (!global_download_buffer)
-//     {
-//         global_download_buffer = win32_allocate(MAX_DOWNLOAD_SIZE);
-//     }
-
-//     HINTERNET connection = InternetOpenUrlA(global_internet, url, global_headers, (unsigned int)-1, INTERNET_FLAG_EXISTING_CONNECT | INTERNET_FLAG_KEEP_CONNECTION | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE, 0);
-//     if (connection)
-//     {
-//         void *data = global_download_buffer;
-//         u32 total_bytes_read = 0;
-//         u32 bytes_to_read = MAX_DOWNLOAD_SIZE;
-//         u32 bytes_read;
-
-//         while (InternetReadFile(connection, (char *)data + total_bytes_read, bytes_to_read, (DWORD *)&bytes_read))
-//         {
-//             if (!bytes_read)
-//             {
-//                 break;
-//             }
-//             total_bytes_read += bytes_read;
-//         }
-
-//         int x, y, n;
-//         unsigned char *image = stbi_load_from_memory((unsigned char *)data, total_bytes_read, &x, &y, &n, 0);
-//         if (image)
-//         {
-
-
-//             // u32 bytes_written;
-//             // WriteFile(file.reserved_for_platform, image, x * n * n, (DWORD *)&bytes_written, 0);
-
-//             downloaded = true;
-
-//             stbi_image_free(image);
-//         }
-
-//         InternetCloseHandle(connection);
-//     }
-
-//     return downloaded;
-// }
-
 
 int __stdcall WinMain(HINSTANCE instance, HINSTANCE prev_instance, char *cmd_line, int cmd_show)
 {
@@ -774,7 +706,7 @@ int __stdcall WinMain(HINSTANCE instance, HINSTANCE prev_instance, char *cmd_lin
     MONITORINFO monitor_info = { sizeof(monitor_info) };
     GetMonitorInfo(monitor, &monitor_info);
 
-    state->overlay.width = 350;
+    state->overlay.width = 320;
     state->overlay.height = 80;
     state->overlay.x = monitor_info.rcWork.right - state->overlay.width - 20;
     state->overlay.y = monitor_info.rcWork.bottom - state->overlay.height - 20;
@@ -784,19 +716,15 @@ int __stdcall WinMain(HINSTANCE instance, HINSTANCE prev_instance, char *cmd_lin
     state->overlay.popup = true;
     win32_init_window(&state->overlay);
 
-    global_dib_section = win32_create_dib_section(&state->overlay);
-    global_font_22 = win32_create_font("Arial", 22);
-    global_font_16 = win32_create_font("Arial", 16);
+    global_overlay = win32_create_overlay(320, 80);
     global_download_buffer = win32_allocate(MAX_DOWNLOAD_SIZE);
 
     win32_init_tray_icon(&state->window);
-
     win32_init_paths(state);
 
     init_streams(state->streams_filename);
 
     win32_init_update_thread(state);
-
 
     while (!state->quit_requested)
     {
@@ -809,6 +737,4 @@ int __stdcall WinMain(HINSTANCE instance, HINSTANCE prev_instance, char *cmd_lin
         TranslateMessage(&msg);
         DispatchMessageA(&msg);
     }
-
-    MessageBox(state->window.hwnd, "Exit", "Exit", MB_OK);
 }

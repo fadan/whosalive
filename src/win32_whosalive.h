@@ -44,17 +44,16 @@ struct Win32State
     b32 quit_requested;
 };
 
-struct Win32DibSection
+struct Win32Overlay
 {
-    HDC dc;
+    int width;
+    int height;
+    
+    int stride;
+    unsigned char *top_left_corner;
+
+    HDC draw_dc;
     HBITMAP bitmap;
-
-    u32 width;
-    u32 height;
-
-    i32 bytes_per_pixel;
-    i32 bytes_per_line;
-    i32 stride;
-    i32 total_size;
-    u8 *top_left_corner;
+    HFONT header_font;
+    HFONT message_font;
 };
