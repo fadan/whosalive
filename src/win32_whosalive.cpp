@@ -436,6 +436,31 @@ inline void win32_set_pixel(Win32Overlay *overlay, int x, int y, unsigned int co
     *pixel = color;
 }
 
+static void win32_round_corners(Win32Overlay *overlay, int top_left_x, int top_left_y, int width, int height, unsigned int fade_color)
+{
+    // NOTE(dan): garbage stuff just for my OCD
+
+    // NOTE(dan): top-left corner
+    win32_set_pixel(overlay, top_left_x + 0, top_left_y + 0, fade_color);
+    win32_set_pixel(overlay, top_left_x + 1, top_left_y + 0, 0x60d6dadb);
+    win32_set_pixel(overlay, top_left_x + 0, top_left_y + 1, 0x60d6dadb);
+
+    // NOTE(dan): top-right corner
+    win32_set_pixel(overlay, top_left_x + width - 1, top_left_y + 0, fade_color);
+    win32_set_pixel(overlay, top_left_x + width - 2, top_left_y + 0, 0x60d6dadb);
+    win32_set_pixel(overlay, top_left_x + width - 1, top_left_y + 1, 0x60d6dadb);
+
+    // NOTE(dan): bottom-left corner
+    win32_set_pixel(overlay, top_left_x + 0, top_left_y + height - 1, fade_color);
+    win32_set_pixel(overlay, top_left_x + 1, top_left_y + height - 1, 0x60d6dadb);
+    win32_set_pixel(overlay, top_left_x + 0, top_left_y + height - 2, 0x60d6dadb);
+
+    // NOTE(dan): bottom-right corner
+    win32_set_pixel(overlay, top_left_x + width - 1, top_left_y + height - 1, fade_color);
+    win32_set_pixel(overlay, top_left_x + width - 2, top_left_y + height - 1, 0x60d6dadb);
+    win32_set_pixel(overlay, top_left_x + width - 1, top_left_y + height - 2, 0x60d6dadb);
+}
+
 static void win32_create_overlay_graphics(Win32Overlay *overlay, char *header, char *message, u32 logo_hash)
 {
     SelectObject(overlay->draw_dc, overlay->bitmap);
@@ -453,25 +478,7 @@ static void win32_create_overlay_graphics(Win32Overlay *overlay, char *header, c
         }
     }
 
-    // NOTE(dan): top-left corner
-    win32_set_pixel(overlay, 0, 0, 0x00000000);
-    win32_set_pixel(overlay, 1, 0, 0x60d6dadb);
-    win32_set_pixel(overlay, 0, 1, 0x60d6dadb);
-
-    // NOTE(dan): top-right corner
-    win32_set_pixel(overlay, overlay->width - 1, 0, 0x00000000);
-    win32_set_pixel(overlay, overlay->width - 2, 0, 0x60d6dadb);
-    win32_set_pixel(overlay, overlay->width - 1, 1, 0x60d6dadb);
-
-    // NOTE(dan): bottom-left corner
-    win32_set_pixel(overlay, 0, overlay->height - 1, 0x00000000);
-    win32_set_pixel(overlay, 1, overlay->height - 1, 0x60d6dadb);
-    win32_set_pixel(overlay, 0, overlay->height - 2, 0x60d6dadb);
-
-    // NOTE(dan): bottom-right corner
-    win32_set_pixel(overlay, overlay->width - 1, overlay->height - 1, 0x00000000);
-    win32_set_pixel(overlay, overlay->width - 2, overlay->height - 1, 0x60d6dadb);
-    win32_set_pixel(overlay, overlay->width - 1, overlay->height - 2, 0x60d6dadb);
+    win32_round_corners(overlay, 0, 0, overlay->width, overlay->height, 0x00000000);
 
     // NOTE(dan): header
     SelectObject(overlay->draw_dc, overlay->header_font);
@@ -528,10 +535,12 @@ static void win32_create_overlay_graphics(Win32Overlay *overlay, char *header, c
                     int dest_col = (top_left_x + x) * 4;
                     unsigned int *dest_pixel = (unsigned int *)(overlay->top_left_corner + dest_row + dest_col);
 
-                    *dest_pixel = *src_pixel;
+                    *dest_pixel = *src_pixel | (0xFF << 24);
                 }
             }
             stbi_image_free(image);
+
+            win32_round_corners(overlay, top_left_x, top_left_y, logo_width, logo_height, 0x00FFFFFFFF);
         }
         platform.unload_file(logo);
     }
