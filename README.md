@@ -14,7 +14,7 @@
 [Here](https://github.com/fadan/whosalive/files/1117076/whosalive.zip) is the latest release in a zip.
 
 ## Building
-* Install [Visual Studio 2015](https://www.visualstudio.com/vs/older-downloads/)
+* Install [Visual Studio 2013](https://www.visualstudio.com/vs/older-downloads/)
 * Run build.bat
 
 Libraries (single-file, public domain licensed) used:
