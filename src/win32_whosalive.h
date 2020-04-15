@@ -57,3 +57,5 @@ struct Win32Overlay
     HFONT header_font;
     HFONT message_font;
 };
+
+void win32_message_box(char *message, char *title);

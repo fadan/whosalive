@@ -6,18 +6,19 @@ struct Stream
 {
     u32 logo_hash;
 
+    char channel_id[128];
+
     char name[128];
     char game[128];
 
     b32 online;
     b32 was_online;
+
+    b32 not_exists_on_twitch;
 };
 
 static u32 num_streams;
 static Stream streams[64];
-
-static char *url_base = "https://api.twitch.tv/kraken/streams?channel=";
-static char url[4096];
 
 inline Stream *get_stream_by_name(char *name)
 {
@@ -206,18 +207,16 @@ static void load_streams(char *filename)
     platform.unload_file(file);
 }
 
-static void init_url()
+static void init_users_url(char *base_url, char *url)
 {
-    copy_string(url_base, url);
+    copy_string(base_url, url);
 
-    u32 at = string_length(url_base);
-
+    u32 at = string_length(base_url);
     for (u32 stream_index = 0; stream_index < num_streams; ++stream_index)
     {
         Stream *stream = streams + stream_index;
 
         copy_string(stream->name, url + at);
-
         at += string_length(stream->name);
 
         if ((stream_index + 1) < num_streams)
@@ -228,9 +227,97 @@ static void init_url()
     url[at] = 0;
 }
 
-static void init_streams(char *streams_filename)
+static void store_id_for_stream(char *name, char *id)
 {
-    load_streams(streams_filename);
+    Stream *stream = get_stream_by_name(name);
+    assert(stream);
 
-    init_url();
+    if (stream)
+    {
+        u32 id_length = string_length(id);
+
+        assert((id_length + 1) < array_count(stream->channel_id));
+        copy_string_and_null_terminate(id, stream->channel_id, id_length);
+    }
+}
+
+static void query_user_ids(void *data, u32 data_size)
+{
+    char *json_string = (char *)data;
+    JsonToken tokens[1024] = {};
+    JsonParser parser;
+
+    json_init_parser(&parser, tokens, array_count(tokens));
+    json_parse(&parser, (char *)data, data_size);
+
+    for (JsonIterator root_iterator = json_iterator_get(&parser, 0); json_iterator_valid(root_iterator); root_iterator = json_iterator_next(root_iterator))
+    {
+        JsonToken *identifier = json_get_token(root_iterator);
+        JsonToken *value = json_peek_next_token(root_iterator);
+        
+        if (value && value->type == JsonType_Array && json_string_token_equals(json_string, identifier, "users"))
+        {
+            for (JsonIterator users_iterator = json_iterator_get(&parser, value); json_iterator_valid(users_iterator); users_iterator = json_iterator_next(users_iterator))
+            {
+                JsonToken *user = json_get_token(users_iterator);
+
+                char name[256];
+                char id[256];
+
+                name[0] = 0;
+                id[0]   = 0;
+
+                for (JsonIterator user_iterator = json_iterator_get(&parser, user); json_iterator_valid(user_iterator); user_iterator = json_iterator_next(user_iterator))
+                {
+                    JsonToken *ident = json_get_token(user_iterator);
+                    JsonToken *val   = json_peek_next_token(user_iterator);
+
+                    if (val && val->type == JsonType_String && json_string_token_equals(json_string, ident, "name"))
+                    {
+                        char *name_src  = json_string + val->start;
+                        i32 name_length = val->end - val->start;
+                        copy_string_and_null_terminate(name_src, name, name_length);
+                    }
+                    else if (val && val->type == JsonType_String && json_string_token_equals(json_string, ident, "_id"))
+                    {
+                        char *id_src  = json_string + val->start;
+                        i32 id_length = val->end - val->start;
+                        copy_string_and_null_terminate(id_src, id, id_length);
+                    }
+                }
+
+                store_id_for_stream(name, id);
+            }
+        }
+    }
+}
+
+static void init_streams_url(char *base_url, char *url)
+{
+    copy_string(base_url, url);
+
+    u32 at = string_length(base_url);
+    u32 valid_stream_count = 0;
+
+    for (u32 stream_index = 0; stream_index < num_streams; ++stream_index)
+    {
+        Stream *stream = streams + stream_index;
+
+        u32 channel_id_length = string_length(stream->channel_id);
+        if (channel_id_length)
+        {
+            if (valid_stream_count++ != 0)
+            {
+                url[at++] = ',';
+            }
+
+            copy_string(stream->channel_id, url + at);
+            at += channel_id_length;
+        }
+        else
+        {
+            stream->not_exists_on_twitch = true;
+        }
+    }
+    url[at] = 0;
 }

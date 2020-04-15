@@ -41,7 +41,7 @@ set cplflags=%cplflags% -fp:fast -Gm- -GR- -EHa- -MTd -Z7
 :: -wd4189 : local variable is initialized but not referenced
 :: -wd4101 : unreferenced local variable 
 :: -wd4127 : conditional expression is constant
-set cplflags=%cplflags% -nologo -FC -WX -W4 -wd4100 -wd4201 -wd4505 -wd4189 -wd4101 -wd4127
+set cplflags=%cplflags% -nologo -FC -WX -W4 -wd4100 -wd4201 -wd4505 -wd4189 -wd4101 -wd4127 -wd4456 -wd4459 -wd4457
 
 ::
 :: Linker flags

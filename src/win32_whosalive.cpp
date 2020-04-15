@@ -33,7 +33,15 @@
 #define LOGO_EXPIRES_SECS           (LOGO_EXPIRES_DAYS * 24 * 60 * 60)
 #define LOGO_EXPIRES_NS             (LOGO_EXPIRES_SECS * 10000000LL)
 
-static char *global_headers = "Client-ID: j6dzqx92ht08vnyr1ghz0a1fdw6oss";
+static char *global_headers = "Accept: application/vnd.twitchtv.v5+json\r\nClient-ID: j6dzqx92ht08vnyr1ghz0a1fdw6oss";
+
+static char *query_users_url_base = "https://api.twitch.tv/kraken/users?login=";
+static char query_users_url[4096];
+
+static char *query_streams_url_base = "https://api.twitch.tv/kraken/streams?channel=";
+static char query_streams_url[4096];
+
+static void *global_download_buffer;
 
 static Win32State global_win32_state_;
 static Win32State *global_win32_state = &global_win32_state_;
@@ -184,6 +192,7 @@ static void win32_create_tray_menu(HWND window)
     POINT mouse;
     GetCursorPos(&mouse);
 
+    u32 num_online = 0;
     for (u32 stream_index = 0; stream_index < num_streams; ++stream_index)
     {
         Stream *stream = streams + stream_index;
@@ -191,11 +200,17 @@ static void win32_create_tray_menu(HWND window)
         {
             i32 cmd_id = TrayIconMenuID_Count + stream_index;
             AppendMenu(menu, MF_CHECKED, cmd_id, stream->name);
+
+            ++num_online;
         }
     }
 
-    AppendMenu(menu, MF_SEPARATOR, 0, 0);
+    if (num_online)
+    {
+        AppendMenu(menu, MF_SEPARATOR, 0, 0);
+    }
 
+    u32 num_offline = 0;
     for (u32 stream_index = 0; stream_index < num_streams; ++stream_index)
     {
         Stream *stream = streams + stream_index;
@@ -203,11 +218,39 @@ static void win32_create_tray_menu(HWND window)
         {
             i32 cmd_id = TrayIconMenuID_Count + stream_index;
             AppendMenu(menu, MF_UNCHECKED, cmd_id, stream->name);
+
+            ++num_offline;
         }
     }
 
-    AppendMenu(menu, MF_SEPARATOR, 0, 0);
+    if (num_offline)
+    {
+        AppendMenu(menu, MF_SEPARATOR, 0, 0);
+    }
+
+    u32 num_invalid = 0;
+    for (u32 stream_index = 0; stream_index < num_streams; ++stream_index)
+    {
+        Stream *stream = streams + stream_index;
+        if (stream->not_exists_on_twitch)
+        {
+            i32 cmd_id = TrayIconMenuID_Count + stream_index;
+            AppendMenu(menu, MF_DISABLED, cmd_id, stream->name);
+        }
+    }
+
+    if (!num_offline && !num_online && !num_invalid)
+    {
+        AppendMenu(menu, MF_DISABLED, 0, "Put the newline separated usernames list into streams.txt file next to this program");
+    }
+    else
+    {
+        AppendMenu(menu, MF_SEPARATOR, 0, 0);
+    }
+
     AppendMenu(menu, MF_UNCHECKED, TrayIconMenuID_Exit, "Exit");
+
+    SetForegroundWindow(window);
 
     i32 cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY, mouse.x, mouse.y, 0, window, 0);
     switch (cmd)
@@ -265,16 +308,16 @@ static intptr __stdcall win32_window_proc(HWND wnd, unsigned int message, uintpt
     return result;
 }
 
-static void win32_update(HINTERNET internet, void *data, unsigned int data_size)
+static void win32_update()
 {
-    HINTERNET connection = InternetOpenUrlA(internet, url, global_headers, (unsigned int)-1, INTERNET_FLAG_EXISTING_CONNECT | INTERNET_FLAG_KEEP_CONNECTION | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE, 0);
+    HINTERNET connection = InternetOpenUrlA(global_internet, query_streams_url, global_headers, (unsigned int)-1, INTERNET_FLAG_EXISTING_CONNECT | INTERNET_FLAG_KEEP_CONNECTION | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE, 0);
     if (connection)
     {
         unsigned int total_bytes_read = 0;
-        unsigned int bytes_to_read = data_size;
+        unsigned int bytes_to_read = MAX_DOWNLOAD_SIZE;
         unsigned int bytes_read;
 
-        while (InternetReadFile(connection, (char *)data + total_bytes_read, bytes_to_read, (DWORD *)&bytes_read))
+        while (InternetReadFile(connection, (char *)global_download_buffer + total_bytes_read, bytes_to_read, (DWORD *)&bytes_read))
         {
             if (!bytes_read)
             {
@@ -284,7 +327,7 @@ static void win32_update(HINTERNET internet, void *data, unsigned int data_size)
         }
 
         pre_update_streams();
-        update_streams(data, total_bytes_read);
+        update_streams(global_download_buffer, total_bytes_read);
         post_update_streams();
 
         InternetCloseHandle(connection);
@@ -299,14 +342,9 @@ static void *win32_allocate(usize size)
 
 static DWORD __stdcall win32_update_thread_proc(void *data)
 {
-    global_internet = InternetOpenA("WhosAlive", INTERNET_OPEN_TYPE_PRECONFIG, 0, 0, 0);
-    if (global_internet)
+    while (WaitForSingleObject(global_update_event, 0xFFFFFFFF) == WAIT_OBJECT_0)
     {
-        void *data = win32_allocate(MAX_DOWNLOAD_SIZE);
-        while (WaitForSingleObject(global_update_event, 0xFFFFFFFF) == WAIT_OBJECT_0)
-        {
-            win32_update(global_internet, data, MAX_DOWNLOAD_SIZE);
-        }
+        win32_update();
     }
     return 0;
 }
@@ -584,6 +622,11 @@ static PLATFORM_UNLOAD_FILE(win32_unload_file)
     }
 }
 
+void win32_message_box(char *message, char *title)
+{
+    MessageBoxA(global_win32_state->window.hwnd, message, title, MB_OK | MB_ICONWARNING);
+}
+
 static PLATFORM_LOAD_FILE(win32_load_file)
 {
     LoadedFile file = {0};
@@ -641,8 +684,6 @@ static void *win32_create_logo_if_not_exists(char *path_to_file, b32 *created)
     return handle;
 }
 
-static void *global_download_buffer;
-
 static PLATFORM_CACHE_LOGO(win32_cache_logo)
 {
     char filename[32];
@@ -696,6 +737,30 @@ static PLATFORM_CACHE_LOGO(win32_cache_logo)
     }
 }
 
+static void win32_query_user_ids()
+{
+    HINTERNET connection = InternetOpenUrlA(global_internet, query_users_url, global_headers, (unsigned int)-1, INTERNET_FLAG_EXISTING_CONNECT | INTERNET_FLAG_KEEP_CONNECTION | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE, 0);
+    if (connection)
+    {
+        unsigned int total_bytes_read = 0;
+        unsigned int bytes_to_read = MAX_DOWNLOAD_SIZE;
+        unsigned int bytes_read;
+
+        while (InternetReadFile(connection, (char *)global_download_buffer + total_bytes_read, bytes_to_read, (DWORD *)&bytes_read))
+        {
+            if (!bytes_read)
+            {
+                break;
+            }
+            total_bytes_read += bytes_read;
+        }
+
+        query_user_ids((char *)global_download_buffer, total_bytes_read);
+
+        InternetCloseHandle(connection);
+    }
+}
+
 int __stdcall WinMain(HINSTANCE instance, HINSTANCE prev_instance, char *cmd_line, int cmd_show)
 {
     Win32State *state = global_win32_state;
@@ -731,7 +796,14 @@ int __stdcall WinMain(HINSTANCE instance, HINSTANCE prev_instance, char *cmd_lin
     win32_init_tray_icon(&state->window);
     win32_init_paths(state);
 
-    init_streams(state->streams_filename);
+    load_streams(state->streams_filename);
+    init_users_url(query_users_url_base, query_users_url);
+
+    global_internet = InternetOpenA("WhosAlive", INTERNET_OPEN_TYPE_PRECONFIG, 0, 0, 0);
+    assert(global_internet);
+
+    win32_query_user_ids();
+    init_streams_url(query_streams_url_base, query_streams_url);
 
     win32_init_update_thread(state);
 

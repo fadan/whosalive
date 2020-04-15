@@ -90,9 +90,10 @@ typedef char test_size_usize[sizeof(usize) == sizeof(char *) ? 1 : -1];
             { \
                 if (!(e)) \
                 { \
+                    win32_message_box("Assertion Failed!", "Assertion Failed:\n\n" #e "\n\nFile: " __FILE__ "\n\nFunction: " __FUNCTION__); \
                     __debugbreak(); \
                 } \
-            } while (0)
+            } while(0)
     #else
         #define assert(e) do \
             { \
