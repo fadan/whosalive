@@ -11,7 +11,7 @@
 * Selecting a stream opens it's Twitch page in the browser.
 
 ## Download
-[Here](https://github.com/fadan/whosalive/files/1117076/whosalive.zip) is the latest release in a zip.
+[Here](https://github.com/fadan/whosalive/releases/download/v0.2/whosalive.zip) is the latest release in a zip.
 
 ## Building
 * Install [Visual Studio 2013](https://www.visualstudio.com/vs/older-downloads/)
